@@ -1,0 +1,1775 @@
+---
+title: "Série chronologique : Churn Bancaire"
+author: "Akbar Fahardine / Yacouba CISSE"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly  # Thème Bootstrap pour un design moderne
+    toc: true  # Table des matières
+    toc_depth: 2  # Profondeur de la TOC
+    toc_float: true  # TOC flottante à gauche
+    number_sections: true  # Numérotation des sections
+---
+
+<!-- Ajout de l'image après le titre -->
+
+<center><img src="https://www.actuia.com/wp-content/uploads/2023/05/Influxdata-InfluxDB-3.0-base-donnees-nouvelle-generation-analyse-series-chronologiques-1200x600.png" alt="Analyse de séries chronologiques" width="80%"/></center>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+```{r, echo=FALSE, results='asis'}
+cat("
+<style>
+/* Couleur de fond et texte global */
+body {
+  background-color: #f4f4f4; /* Fond gris clair */
+  color: #333; /* Texte gris foncé */
+  font-family: 'Arial', sans-serif;
+}
+
+/* Style des titres */
+h1 {
+  color: #007acc; /* Bleu vif */
+  text-transform: uppercase;
+  font-weight: bold;
+  text-align: center;
+  border-bottom: 3px solid #007acc;
+  padding-bottom: 10px;
+}
+h2 {
+  color: #005580; /* Bleu foncé */
+  font-weight: bold;
+  margin-top: 30px;
+}
+h3 {
+  color: #004466; /* Bleu foncé plus sombre */
+  font-weight: bold;
+}
+
+/* Style des tableaux */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background-color: #fff;
+  box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1);
+}
+th {
+  background-color: #007acc;
+  color: white;
+  padding: 10px;
+  text-transform: uppercase;
+}
+td {
+  border: 1px solid #ccc;
+  padding: 8px;
+  text-align: left;
+}
+</style>
+")
+```
+
+# Introduction
+
+Ce projet se base sur l'analyse des transactions bancaires issues d'un jeu de données public disponible sur Kaggle, collecté en Inde. Les informations fournies incluent des détails socio-démographiques des clients, ainsi que des indicateurs d'activités de comptes et des données de transactions, exprimées en roupies indiennes (INR). Ce contexte permet d'explorer les comportements des clients dans le cadre du secteur bancaire indien, offrant ainsi une perspective unique sur les dynamiques financières de cette région.
+
+Notre jeu de donnée est issu de Kaggle : [la désertion bancaire](https://www.kaggle.com/code/mohamedchahed/pr-diction-de-la-d-sertion-bancaire) 
+
+**Problématique**: **Comment prédire les flux de trésorerie futurs en analysant les séries temporelles des dépôts et retraits sur les comptes bancaires ?**
+
+## Tableau explicatif de nos Variables
+
+| Nom de la Variable  | Type        | Label                     |
+|---------------------|-------------|---------------------------|
+| Account No          | Identifiant | Numéro de compte          |
+| DATE                | Date        | Date de la transaction    |
+| TRANSACTION DETAILS | Texte       | Détails de la transaction |
+| CHQ.NO.             | Numérique   | Numéro de chèque          |
+| VALUE DATE          | Date        | Date de valeur            |
+| WITHDRAWAL AMT      | Numérique   | Montant de retrait        |
+| DEPOSIT AMT         | Numérique   | Montant de dépôt          |
+| BALANCE AMT         | Numérique   | Montant du solde          |
+
+-   Dans le tableau fourni, il y a un total de 5 variables numériques et 3 variables de type caractère.
+
+-   Les variables numériques comprennent CHQ.NO., WITHDRAWAL AMT, DEPOSIT AMT et BALANCE AMT, qui sont des montants ou des identifiants quantitatifs.
+
+-   Les variables de type caractère incluent Account No, TRANSACTION DETAILS, et DATE, qui contiennent des informations descriptives ou identifiantes. Ce mélange de types de variables permet une analyse complète des transactions financières.
+
+```{r}
+# Charger le package n?cessaire
+library(openxlsx)
+
+# Charger le package n?cessaire
+library(openxlsx)
+
+# Lire le fichier Excel
+#df <- read.xlsx("C:/Users/Scolaire/Documents/Prevition temporelle/data.xlsx", detectDates = TRUE)
+df <- read.xlsx("~/Documents/Master 2/Série temporelle ou chronologique/Copie de bank1.xlsx")
+#df
+
+# Afficher la structure du dataframe pour v?rifier les types
+#str(df)
+
+
+```
+
+```{r}
+# Remplacer les valeurs manquantes par 0 dans les colonnes DEPOSIT.AMT et WITHDRAWAL.AMT
+df$DEPOSIT.AMT[is.na(df$DEPOSIT.AMT)] <- 0
+df$WITHDRAWAL.AMT[is.na(df$WITHDRAWAL.AMT)] <- 0
+# Créer la colonne 'flux' en combinant les dépôts et les retraits
+df$flux <- ifelse(df$DEPOSIT.AMT > 0, df$DEPOSIT.AMT, 
+                  ifelse(df$WITHDRAWAL.AMT > 0, -df$WITHDRAWAL.AMT, NA))
+# Créer la colonne 'flux' en ajoutant les dépôts et les retraits (négatifs)
+df$flux <- df$DEPOSIT.AMT - df$WITHDRAWAL.AMT
+
+
+
+# Vérifier le résultat
+head(df)
+
+
+```
+
+# Visualisation des séries
+
+## Evolution de la variable cible en fonction du temps
+
+```{r}
+# Charger les bibliothèques nécessaires
+library(ggplot2)
+library(dplyr)  # Pour le regroupement de données
+library(fpp2)   # Pour autoplot
+
+# S'assurer que la colonne 'DATE' est au format Date
+df$DATE <- as.Date(df$DATE, origin = "1900-01-01")
+
+# Remplacer les valeurs manquantes par 0 dans les colonnes DEPOSIT.AMT et WITHDRAWAL.AMT
+df$DEPOSIT.AMT[is.na(df$DEPOSIT.AMT)] <- 0
+df$WITHDRAWAL.AMT[is.na(df$WITHDRAWAL.AMT)] <- 0
+
+# Calculer le flux pour chaque ligne
+df$flux <- df$DEPOSIT.AMT - df$WITHDRAWAL.AMT
+
+# Compter le flux total par jour
+flux_per_day <- df %>%
+  group_by(DATE) %>%
+  summarise(flux = sum(flux))
+
+# Identifier la date de début et la date de fin
+start_date <- min(flux_per_day$DATE)
+end_date <- max(flux_per_day$DATE)
+
+# Créer la série temporelle à partir des flux par jour
+df_ts_jour <- ts(flux_per_day$flux, start = c(as.numeric(format(start_date, "%Y")), as.numeric(format(start_date, "%m"))), frequency = 365)
+
+# Visualiser la série temporelle avec autoplot
+autoplot(df_ts_jour) +
+  ggtitle("Évolution du flux par jour") +
+  ylab("Flux") +
+  xlab("Date") +
+  theme_minimal()
+
+
+```
+
+Ce graphique montre l'évolution du flux de transactions bancaires jour après jour, de 2015 à 2018. Les variations dans les valeurs indiquent que le flux quotidien a des fluctuations importantes, avec des pics notables en 2016 et en 2017, où les flux atteignent des niveaux très élevés et très bas..
+
+```{r}
+# Extraire l'année de chaque date
+flux_per_day <- flux_per_day %>%
+  mutate(annee = format(DATE, "%Y"))
+
+# Trouver les dates avec les pics max et min chaque année
+max_min_pics <- flux_per_day %>%
+  group_by(annee) %>%
+  summarise(date_max_flux = DATE[which.max(flux)],
+            max_flux = max(flux),
+            date_min_flux = DATE[which.min(flux)],
+            min_flux = min(flux))
+
+# Afficher les résultats
+print(max_min_pics)
+
+
+```
+
+Les dates associées aux pics maximaux et minimaux dans les flux financiers observés chaque année en Inde peuvent refléter des événements économiques spécifiques ou des tendances saisonnières influençant les dépôts et les retraits. En 2015, le pic maximal du 25 juillet pourrait coïncider avec la saison des soldes ou des périodes de hausse d'activité économique, tandis que le pic minimal du 20 juin correspond probablement à un ralentissement dû à la mousson, un facteur souvent défavorable aux affaires. En 2016, le pic maximal de février peut être lié aux ajustements financiers de fin d’année fiscale, tandis que la chute du 8 mars pourrait refléter des dépenses massives avant cette clôture. En 2017, le pic d’avril semble être en lien avec le début de la nouvelle année fiscale, tandis que le flux négatif de mai pourrait s’expliquer par les paiements d’impôts ou les ajustements post-fiscaux. En 2018, les mêmes phénomènes se répètent, avec un pic de flux en février et une baisse en juin, saison des moussons. Enfin, en 2019, le flux maximal de début janvier pourrait s'expliquer par des réajustements financiers de début d’année, tandis que la baisse en fin de mois pourrait être due à des paiements fiscaux. Ces variations annuelles montrent un lien étroit entre les cycles financiers, les événements économiques et les saisons en Inde
+
+## Visualisation par mois
+
+```{r}
+# Charger les bibliothèques nécessaires
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+
+# Supposons que df soit votre dataframe et que 'DEPOSIT.AMT' et 'WITHDRAWAL.AMT' soient vos colonnes de montants
+# Convertir la colonne DATE en format Date
+df$DATE <- as.Date(df$DATE)
+
+
+
+# Créer une nouvelle colonne 'Mois' pour extraire le mois
+df <- df %>%
+  mutate(Mois = floor_date(DATE, "month"))  # Arrondir au début du mois
+
+# Agréger les données par mois pour obtenir le flux total
+df_monthly_flux <- df %>%
+  group_by(Mois) %>%
+  summarise(Flux_Total = sum(flux, na.rm = TRUE))  # Somme des flux par mois
+
+# Créer un graphique du flux total par mois en utilisant ggmonthplot
+ggmonthplot(ts(df_monthly_flux$Flux_Total, frequency = 12, start = c(year(min(df_monthly_flux$Mois)), month(min(df_monthly_flux$Mois))))) +
+  ggtitle("Flux Total par Mois") +
+  ylab("Flux Total") +
+  xlab("Mois")
+
+```
+
+Ici, le flux total est présenté mensuellement, avec des moyennes marquées par des lignes bleues. On observe des pics en termes de flux, principalement autour des mois de février, mars, et avril, avec des fluctuations importantes à travers l'année.
+
+## Visualisation saisonière
+
+```{r}
+# Installer le package ggfortify si ce n'est pas encore fait
+# install.packages("ggfortify")  # Décommenter cette ligne si nécessaire
+
+# Charger les bibliothèques nécessaires
+library(forecast)
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(ggfortify)  # Pour ggseasonplot
+library(ggpubr)     # Pour ggarrange
+
+# Supposons que df soit votre dataframe et que 'DEPOSIT.AMT' et 'WITHDRAWAL.AMT' soient vos colonnes de montants
+# Convertir la colonne DATE en format Date
+df$DATE <- as.Date(df$DATE)
+
+
+# Créer une nouvelle colonne 'Mois' pour extraire le mois
+df <- df %>%
+  mutate(Mois = floor_date(DATE, "month"))  # Arrondir au début du mois
+
+# Agréger les données par mois pour obtenir le flux total
+df_monthly_flux <- df %>%
+  group_by(Mois) %>%
+  summarise(Flux_Total = sum(flux, na.rm = TRUE))  # Somme des flux par mois
+
+# Créer la série temporelle à partir des données mensuelles
+df_ts_mois <- ts(df_monthly_flux$Flux_Total, frequency = 12, start = c(year(min(df_monthly_flux$Mois)), month(min(df_monthly_flux$Mois))))
+
+# Créer le premier graphique saisonnier pour le flux
+p1 <- ggseasonplot(df_ts_mois) +
+  ggtitle("Graphique saisonnier: Flux Total") +
+  ylab("Flux Total") +
+  xlab("Mois")
+
+# Créer le deuxième graphique saisonnier continu pour le flux
+#p2 <- ggseasonplot(df_ts, continuous = TRUE) +
+ # ggtitle("Graphique saisonnier continu: Flux Total") +
+  #ylab("Flux Total") +
+  #xlab("Mois")
+
+# Afficher les deux graphiques côte à côte
+#ggarrange(p1, p2, ncol = 2, nrow = 1)
+
+ggarrange(p1, ncol = 1, nrow = 1)
+
+```
+
+Ce graphique présente une vue saisonnière du flux total par mois pour les années de 2015 à 2019. Chaque couleur représente une année. Il montre une tendance annuelle des transactions, avec des pics en avril et juillet, suivis d'une baisse marquée en juin et décembre.
+
+```{r}
+# Supposons que df soit votre dataframe et que 'DEPOSIT.AMT' et 'WITHDRAWAL.AMT' soient vos colonnes de montants
+# Convertir la colonne DATE en format Date
+df$DATE <- as.Date(df$DATE)
+
+
+# Créer une nouvelle colonne 'Mois' pour extraire le mois
+df <- df %>%
+  mutate(Mois = floor_date(DATE, "month"))  # Arrondir au début du mois
+
+# Agréger les données par mois pour obtenir le flux total
+df_monthly_flux <- df %>%
+  group_by(Mois) %>%
+  summarise(Flux_Total = sum(flux, na.rm = TRUE))  # Somme des flux par mois
+
+# Créer la série temporelle à partir des données mensuelles
+df_ts_mois <- ts(df_monthly_flux$Flux_Total, frequency = 12, start = c(year(min(df_monthly_flux$Mois)), month(min(df_monthly_flux$Mois))))
+
+# Créer un graphique saisonnier polaire pour le flux
+saison_polar = ggseasonplot(df_ts_mois, polar = TRUE) +
+  ylab("Flux Total") +
+  ggtitle("Graphique saisonnier polaire: Flux Total par Mois")
+
+ggarrange(saison_polar, ncol = 1, nrow = 1)
+```
+
+# Autocorélation : Analyse de corrélation dans le temps
+
+## Formulation mathématique : Notions de ACF (Autocorelation Function ) et PACF (Partial Autocorelation Function )
+
+La formule de la corrélation ρ(h) :
+
+$$ \rho(h) = \text{cor}(Y_t, Y_{t-h}) = \text{cor}(Y_t, Y_{t+h}) \quad     \text{pour tout} \; h \geq 0 \\
+ \text{quelque soit la date}, \; t $$
+
+La corrélation $\rho(h)$ ne dépend pas du temps.
+
+La formule pour $r(h)$ :
+
+$$
+r(h) = \text{cor}\left(\text{Résidu}\left(\text{lm}(Y_t \sim Y_{t+1}, ..., Y_{t+h-1})\right), \text{Résidu}\left(\text{lm}(Y_{t+h} \sim Y_{t+1}, ..., Y_{t+h-1})\right)\right) \\
+\text{pour tout} \; h \geq 0 \\
+\text{quelque soit la date}, \; t
+$$t
+
+\##
+
+```{r}
+gglagplot(df_ts_mois,do.lines = FALSE)
+```
+
+```{r}
+library(astsa)
+lag1.plot(df_ts_mois,max.lag=6)
+```
+
+## Graphique ACF et PACF
+
+```{r}
+par(mfrow=c(1,3))
+  plot(df_ts_jour)
+  Acf(df_ts_jour,lag=10)# Changer éventuellement le lag
+  Pacf(df_ts_jour,lag=10)
+```
+
+## Utilité de l’ACF et PACF : stationnarité et périodicité
+
+L’ACF et PACF sont définis sous hypothèse de stationnarité : Les corrélations ρ(h) et \r(h) ne dépendent pas du temps.
+
+Les graphiques de ACF et PACF permettent de détecter des processus stationnaires : ARMA, ARIMA, SARMA, SARIMA,..(Voir partie aléatoire) Éventuellement certaines périodicités
+
+```{r}
+
+ggarrange(autoplot(df_ts_jour),ggAcf(df_ts_jour,lag=100 ),ggPacf(df_ts_jour,lag=100 ),nrow=1 )
+```
+
+Dans notre cas notre serie semble stationnaire.
+
+# Application des méthodes de régression
+
+Les méthodes de régression (linéaire, polynomiale, GAM, B-spline) sont utilisées pour modéliser la tendance globale de la série temporelle et faire des prédictions à moyen/long terme.
+
+## Régression Linéaire
+
+La régression linéaire simple modélise la relation entre une variable dépendante Y et une seule variable indépendante X . Elle suppose une relation linéaire entre ces deux variables.
+
+$$
+Y_t = \beta_0 + \beta_1 t + \epsilon_t
+$$
+
+-   $Y_t$ : valeur de la série chronologique à l'instant $t$\
+-   $t$ : le temps\
+-   $\beta_0$ : l'ordonnée à l'origine\
+-   $\beta_1$ : le coefficient de pente\
+-   $\epsilon_t$ : le terme d'erreur aléatoire
+
+```{r}
+# Modèle linéaire
+time <- time(df_ts_jour)  # Définir le temps en fonction de la série temporelle
+fit_lin <- lm(df_ts_jour ~ time)  # Ajuster le modèle linéaire
+
+# Calculer AIC et BIC
+aic_fit_lin <- AIC(fit_lin)
+bic_fit_lin <- BIC(fit_lin)
+
+# Extraire les résidus
+residuals_lin <- residuals(fit_lin)
+
+# Calculer RMSE
+rmse_fit_lin <- sqrt(mean(residuals_lin^2, na.rm = TRUE))
+
+# Calculer MAE
+mae_fit_lin <- mean(abs(residuals_lin), na.rm = TRUE)
+
+# Afficher les résultats
+cat("AIC du modèle linéaire :", aic_fit_lin, "\n")
+cat("BIC du modèle linéaire :", bic_fit_lin, "\n")
+cat("RMSE du modèle linéaire :", rmse_fit_lin, "\n")
+cat("MAE du modèle linéaire :", mae_fit_lin, "\n")
+
+# Résumé du modèle
+summary(fit_lin)
+```
+
+Les résultats montrent que le modèle linéaire ne capture pas bien les variations de la série chronologique. Les coefficients ne sont pas significatifs, et le R-squared est très faible. En résumé, ce modèle n'explique pas bien les données observées. Il serait pertinent d'explorer des modèles plus complexes ou de vérifier la qualité des données.
+
+## Régression polynomial
+
+La régression polynomiale est utilisée pour modéliser une relation non linéaire entre la variable dépendante Y et une ou plusieurs variables indépendantes X . Elle est une extension de la régression linéaire avec des termes de puissances supérieures.
+
+$$
+Y_t = \beta_0 + \beta_1 t + \beta_2 t^2 + \beta_3 t^3 + \ldots + \beta_k t^k + \epsilon_t
+$$
+
+-   $k$ : le degré du polynôme\
+-   $\beta_0, \beta_1, \ldots, \beta_k$ : coefficients des termes polynomiaux\
+-   $\epsilon_t$ : le terme d'erreur
+
+Le modèle polynômial de degré 3 semble capturer des tendances significatives dans les données, même si le R-squared est relativement bas. Cela indique que, bien que le modèle soit significatif, il reste beaucoup de variabilité dans les données qui n'est pas expliquée par ce modèle.
+
+```{r}
+# 📌 Créer une copie avant modification
+df_ts_jour_original <- df_ts_jour  # Sauvegarde l'original
+```
+
+```{r}
+# 📌 Charger les bibliothèques nécessaires
+library(ggplot2)
+library(dplyr)
+library(zoo)  # Pour interpolation des valeurs manquantes
+
+# ✅ Créer une copie de df_ts_jour pour le traitement
+df_results <- data.frame(
+  index = time(df_ts_jour),  # Conserve l'index temporel
+  value = as.numeric(df_ts_jour)  # Convertit en valeurs numériques
+)
+
+# ✅ Remplacement des valeurs problématiques (NA, Inf, Zéros)
+df_results <- df_results %>%
+  mutate(value = replace(value, value == 0, 1e-10)) %>%  # Remplace les 0 par une très petite valeur
+  mutate(value = ifelse(value < 0, NA, value)) %>%  # Convertit les valeurs négatives en NA
+  mutate(value = na.approx(value, na.rm = FALSE)) %>%  # Interpolation des valeurs NA
+  filter(!is.infinite(value))  # Supprime les valeurs infinies
+
+# ✅ Définir les degrés à tester
+degrees <- 1:20  # Tester des polynômes de degré 1 à 20
+aic_values <- numeric(length(degrees))
+bic_values <- numeric(length(degrees))
+rmse_values <- numeric(length(degrees))
+mae_values <- numeric(length(degrees))
+
+# ✅ Boucle pour ajuster les modèles polynomiaux
+for (i in degrees) {
+  fit_poly <- lm(log(value) ~ poly(index, i, raw = TRUE), data = df_results)
+  predictions <- exp(predict(fit_poly, newdata = df_results))
+
+  residuals <- df_results$value - predictions
+  rmse_values[i] <- sqrt(mean(residuals^2, na.rm = TRUE))
+  mae_values[i] <- mean(abs(residuals), na.rm = TRUE)
+  aic_values[i] <- AIC(fit_poly)
+  bic_values[i] <- BIC(fit_poly)
+}
+
+# ✅ Sélection du meilleur degré basé sur AIC et BIC combinés
+optimal_degree_poly <- degrees[which.min(aic_values + bic_values)]
+best_aic <- min(aic_values)
+best_bic <- min(bic_values)
+best_rmse <- min(rmse_values)
+best_mae <- min(mae_values)
+
+# ✅ Mise à l'échelle des valeurs pour un meilleur affichage
+df_errors <- data.frame(Degree = degrees, AIC = aic_values, BIC = bic_values, RMSE = rmse_values, MAE = mae_values) %>%
+  mutate(AIC_norm = (AIC - min(AIC)) / (max(AIC) - min(AIC)),
+         BIC_norm = (BIC - min(BIC)) / (max(BIC) - min(BIC)),
+         RMSE_norm = (RMSE - min(RMSE)) / (max(RMSE) - min(RMSE)),
+         MAE_norm = (MAE - min(MAE)) / (max(MAE) - min(MAE)))
+
+# ✅ Affichage des valeurs des critères pour chaque degré
+df_errors %>%
+  select(Degree, AIC, BIC, RMSE, MAE) %>%
+  mutate(AIC = round(AIC, 2),
+         BIC = round(BIC, 2),
+         RMSE = round(RMSE, 2),
+         MAE = round(MAE, 2)) %>%
+  print()
+
+# ✅ Affichage du résumé du modèle sélectionné
+fit_poly_best <- lm(log(value) ~ poly(index, optimal_degree_poly, raw = TRUE), data = df_results)
+summary(fit_poly_best)
+
+# ✅ Affichage du degré optimal et ses valeurs correspondantes
+cat("✅ Degré optimal sélectionné :", optimal_degree_poly, "\n")
+cat("📊 AIC :", round(best_aic, 2), "\n")
+cat("📊 BIC :", round(best_bic, 2), "\n")
+cat("📊 RMSE :", round(best_rmse, 2), "\n")
+cat("📊 MAE :", round(best_mae, 2), "\n")
+
+# ✅ 📊 Graphique comparatif des critères avec échelle normalisée
+ggplot(df_errors, aes(x = Degree)) +
+  geom_point(aes(y = AIC_norm, color = "AIC"), size = 3) +
+  geom_point(aes(y = BIC_norm, color = "BIC"), size = 3) +
+  geom_point(aes(y = RMSE_norm, color = "RMSE"), size = 3) +
+  geom_point(aes(y = MAE_norm, color = "MAE"), size = 3) +
+  
+  geom_line(aes(y = AIC_norm, color = "AIC"), size = 1) +
+  geom_line(aes(y = BIC_norm, color = "BIC"), size = 1) +
+  geom_line(aes(y = RMSE_norm, color = "RMSE"), size = 1) +
+  geom_line(aes(y = MAE_norm, color = "MAE"), size = 1) +
+  
+  labs(title = "Sélection du Degré Optimal (Modèle Polynomial)",
+       x = "Degré",
+       y = "Critères (échelle normalisée)") +
+  scale_color_manual(values = c("AIC" = "blue", "BIC" = "red", "RMSE" = "green", "MAE" = "orange")) +
+  theme_minimal()
+
+# ✅ Application du meilleur modèle polynomial
+df_results$Pred_Poly <- exp(predict(fit_poly_best, newdata = df_results))
+
+# ✅ 📊 Graphique du modèle Polynomial optimal appliqué à la série
+ggplot(df_results, aes(x = index)) +
+  geom_line(aes(y = value, color = "Série Originale"), size = 1) +
+  geom_line(aes(y = Pred_Poly, color = "Modèle Polynomial"), size = 1.2) +
+  labs(title = paste("Meilleur Modèle Polynomial (Degré", optimal_degree_poly, ") Appliqué à la Série"),
+       x = "Index",
+       y = "Valeur de la Série") +
+  scale_color_manual(values = c("Série Originale" = "black", "Modèle Polynomial" = "blue")) +
+  theme_minimal()
+
+# ✅ Conserver df_ts_jour en tant que série temporelle
+df_ts_jour <- ts(df_results$value, start = start(df_ts_jour), frequency = frequency(df_ts_jour))
+pred_ts <- ts(df_results$Pred_Poly, start = start(df_ts_jour), frequency = frequency(df_ts_jour))
+
+```
+
+## Additive model, GAM
+
+Le modèle GAM permet de modéliser des relations non linéaires complexes en utilisant des fonctions de lissage.
+
+$$
+Y_t = \beta_0 + f(t) + \epsilon_t
+$$
+
+-   $f(t)$ : une fonction de lissage (par exemple une spline)\
+
+-   $\beta_0$ : l'ordonnée à l'origine\
+
+-   $\epsilon_t$ : le terme d'erreur
+
+-   Les termes lissés sont significatifs (p-value \< 0.001), avec une deviance expliquée de 18 % et un R² ajusté de 0.175.
+
+-   Les valeurs associées à la signification approximative des termes lissés montrent une contribution importante (edf = 8.503, F = 31.17)
+
+Le GAM capture mieux les tendances non linéaires qu’un modèle linéaire ou polynomial simple. Cependant, la proportion de variance expliquée reste modeste, suggérant que des facteurs additionnels ou des dynamiques complexes influencent les données.
+
+```{r}
+# 📌 Charger les bibliothèques nécessaires
+library(ggplot2)
+library(mgcv)
+library(dplyr)
+library(zoo)  # Pour l'interpolation des valeurs manquantes
+
+# ✅ Créer une copie de df_ts_jour pour le traitement
+df_results <- data.frame(
+  index = time(df_ts_jour),  # Conserve l'index temporel
+  value = as.numeric(df_ts_jour)  # Convertit en valeurs numériques
+)
+
+# ✅ Remplacement des valeurs problématiques (NA, Inf, Zéros)
+df_results <- df_results %>%
+  mutate(value = replace(value, value == 0, 1e-10)) %>%  # Remplace les 0 par une très petite valeur
+  mutate(value = ifelse(value < 0, NA, value)) %>%  # Convertit les valeurs négatives en NA
+  mutate(value = na.approx(value, na.rm = FALSE)) %>%  # Interpolation des valeurs NA
+  filter(!is.infinite(value))  # Supprime les valeurs infinies
+
+# ✅ Définition des paramètres de lissage à tester
+smooth_params <- seq(3, 20, by = 1)  # Tester de k = 3 à k = 20
+aic_values <- numeric(length(smooth_params))
+bic_values <- numeric(length(smooth_params))
+rmse_values <- numeric(length(smooth_params))
+mae_values <- numeric(length(smooth_params))
+
+# ✅ Boucle pour ajuster les modèles GAM avec différents paramètres de lissage
+for (i in seq_along(smooth_params)) {
+  k_val <- smooth_params[i]
+  
+  tryCatch({
+    fit_gam <- gam(value ~ s(index, bs = "cs", k = min(k_val, nrow(df_results) - 1)), data = df_results)
+    predictions <- predict(fit_gam, newdata = df_results)
+
+    residuals <- df_results$value - predictions
+    rmse_values[i] <- sqrt(mean(residuals^2, na.rm = TRUE))
+    mae_values[i] <- mean(abs(residuals), na.rm = TRUE)
+    aic_values[i] <- AIC(fit_gam)
+    bic_values[i] <- BIC(fit_gam)
+
+  }, error = function(e) {
+    cat("❌ Erreur à k =", k_val, ": ", e$message, "\n")
+    aic_values[i] <- NA
+    bic_values[i] <- NA
+    rmse_values[i] <- NA
+    mae_values[i] <- NA
+  })
+}
+
+# ✅ Sélection du meilleur paramètre basé sur AIC et BIC combinés
+optimal_smooth_gam <- smooth_params[which.min(aic_values + bic_values)]
+best_aic <- min(aic_values, na.rm = TRUE)
+best_bic <- min(bic_values, na.rm = TRUE)
+best_rmse <- min(rmse_values, na.rm = TRUE)
+best_mae <- min(mae_values, na.rm = TRUE)
+
+# ✅ Affichage des valeurs optimales du modèle sélectionné
+cat("\n✅ Paramètre de lissage optimal sélectionné : k =", optimal_smooth_gam, "\n")
+cat("📊 AIC :", round(best_aic, 2), "\n")
+cat("📊 BIC :", round(best_bic, 2), "\n")
+cat("📊 RMSE :", round(best_rmse, 2), "\n")
+cat("📊 MAE :", round(best_mae, 2), "\n")
+
+# ✅ Normalisation des valeurs pour une meilleure visibilité
+df_errors <- data.frame(SmoothParam = smooth_params, AIC = aic_values, BIC = bic_values, RMSE = rmse_values, MAE = mae_values) %>%
+  mutate(AIC_norm = (AIC - min(AIC, na.rm = TRUE)) / (max(AIC, na.rm = TRUE) - min(AIC, na.rm = TRUE)),
+         BIC_norm = (BIC - min(BIC, na.rm = TRUE)) / (max(BIC, na.rm = TRUE) - min(BIC, na.rm = TRUE)),
+         RMSE_norm = (RMSE - min(RMSE, na.rm = TRUE)) / (max(RMSE, na.rm = TRUE) - min(RMSE, na.rm = TRUE)),
+         MAE_norm = (MAE - min(MAE, na.rm = TRUE)) / (max(MAE, na.rm = TRUE) - min(MAE, na.rm = TRUE)))
+
+# ✅ Affichage des valeurs des critères pour chaque paramètre de lissage
+df_errors %>%
+  select(SmoothParam, AIC, BIC, RMSE, MAE) %>%
+  mutate(AIC = round(AIC, 2),
+         BIC = round(BIC, 2),
+         RMSE = round(RMSE, 2),
+         MAE = round(MAE, 2)) %>%
+  print()
+# 📊 📌 Graphique de sélection du paramètre optimal avec mise à l'échelle
+ggplot(df_errors, aes(x = SmoothParam)) +
+  geom_line(aes(y = AIC_norm, color = "AIC"), size = 1) +
+  geom_line(aes(y = BIC_norm, color = "BIC"), size = 1) +
+  geom_line(aes(y = RMSE_norm, color = "RMSE"), size = 1) +
+  geom_line(aes(y = MAE_norm, color = "MAE"), size = 1) +
+  labs(title = "Sélection du Meilleur Paramètre de Lissage (GAM)",
+       x = "Paramètre de lissage k",
+       y = "Valeur Normalisée des Critères") +
+  scale_color_manual(values = c("AIC" = "blue", "BIC" = "red", "RMSE" = "green", "MAE" = "orange")) +
+  theme_minimal()
+
+# ✅ Ajustement du meilleur modèle GAM
+fit_gam_best <- gam(value ~ s(index, bs = "cs", k = optimal_smooth_gam), data = df_results)
+summary(fit_gam_best)
+
+# ✅ Application du modèle GAM optimal à la série
+df_results$Pred_GAM <- predict(fit_gam_best, newdata = df_results)
+
+# 📊 📌 Graphique du modèle GAM optimal appliqué à la série
+ggplot(df_results, aes(x = index)) +
+  geom_line(aes(y = value, color = "Série Originale"), size = 1) +
+  geom_line(aes(y = Pred_GAM, color = "Modèle GAM"), size = 1.2) +
+  labs(title = paste("Meilleur Modèle GAM (k =", optimal_smooth_gam, ") Appliqué à la Série"),
+       x = "Index",
+       y = "Valeur de la Série") +
+  scale_color_manual(values = c("Série Originale" = "black", "Modèle GAM" = "goldenrod")) +
+  theme_minimal()
+
+# ✅ Conserver df_ts_jour en tant que série temporelle
+df_ts_jour <- ts(df_results$value, start = start(df_ts_jour), frequency = frequency(df_ts_jour))
+pred_ts_gam <- ts(df_results$Pred_GAM, start = start(df_ts_jour), frequency = frequency(df_ts_jour))
+
+```
+
+## Bspline regression
+
+La régression B-Spline utilise des fonctions de base spline pour modéliser des courbes flexibles et ajustées aux données.
+
+$$
+Y_t = \beta_0 + \sum_{j=1}^k \beta_j B_j(t) + \epsilon_t
+$$
+
+-   $B_j(t)$ : les fonctions de base spline (B-splines)\
+
+-   $k$ : le nombre de fonctions de base spline\
+
+-   $\beta_j$ : les coefficients associés aux splines\
+
+-   $\epsilon_t$ : le terme d'erreur
+
+-   Les coefficients estimés des splines sont significatifs, avec des p-values très faibles (\< 0.05), indiquant une bonne capture des variations.
+
+-   R² ajusté = 0.151, F-statistic = 46.99, p-value \< 2.2e-16.
+
+-   Le résidu standard (43630000) montre que des erreurs importantes persistent malgré l’ajustement
+
+La régression B-spline offre une modélisation flexible, mais la proportion de variance expliquée (R² ajusté faible) indique que des structures non modélisées persistent dans les données.
+
+```{r}
+# 📌 Charger les bibliothèques nécessaires
+library(ggplot2)
+library(splines)
+library(dplyr)
+library(zoo)  # Pour interpolation des valeurs manquantes
+
+# ✅ Créer une copie de df_ts_jour pour le traitement
+df_results <- data.frame(
+  index = time(df_ts_jour),  # Conserve l'index temporel
+  value = as.numeric(df_ts_jour)  # Convertit en valeurs numériques
+)
+
+# ✅ Remplacement des valeurs problématiques (NA, Inf, Zéros)
+df_results <- df_results %>%
+  mutate(value = replace(value, value == 0, 1e-10)) %>%  # Remplace les 0 par une très petite valeur
+  mutate(value = ifelse(value < 0, NA, value)) %>%  # Convertit les valeurs négatives en NA
+  mutate(value = na.approx(value, na.rm = FALSE)) %>%  # Interpolation des valeurs NA
+  filter(!is.infinite(value))  # Supprime les valeurs infinies
+
+# ✅ Définir les degrés à tester
+degrees <- 1:20  # Tester B-Spline de degré 1 à 20
+aic_values <- numeric(length(degrees))
+bic_values <- numeric(length(degrees))
+rmse_values <- numeric(length(degrees))
+mae_values <- numeric(length(degrees))
+
+# ✅ Boucle pour ajuster les modèles B-Spline avec différents degrés
+for (i in degrees) {
+  tryCatch({
+    fit_bspline <- lm(value ~ bs(index, df = i), data = df_results)
+    predictions <- predict(fit_bspline, newdata = df_results)
+
+    residuals <- df_results$value - predictions
+    rmse_values[i] <- sqrt(mean(residuals^2, na.rm = TRUE))
+    mae_values[i] <- mean(abs(residuals), na.rm = TRUE)
+    aic_values[i] <- AIC(fit_bspline)
+    bic_values[i] <- BIC(fit_bspline)
+
+  }, error = function(e) {
+    cat("❌ Erreur à df =", i, ": ", e$message, "\n")
+    aic_values[i] <- NA
+    bic_values[i] <- NA
+    rmse_values[i] <- NA
+    mae_values[i] <- NA
+  })
+}
+
+# ✅ Sélection du meilleur degré basé sur AIC et BIC combinés
+optimal_degree_bspline <- degrees[which.min(aic_values + bic_values)]
+best_aic <- min(aic_values, na.rm = TRUE)
+best_bic <- min(bic_values, na.rm = TRUE)
+best_rmse <- min(rmse_values, na.rm = TRUE)
+best_mae <- min(mae_values, na.rm = TRUE)
+
+# ✅ Affichage des valeurs optimales du modèle sélectionné
+cat("\n✅ Degré optimal sélectionné : df =", optimal_degree_bspline, "\n")
+cat("📊 AIC :", round(best_aic, 2), "\n")
+cat("📊 BIC :", round(best_bic, 2), "\n")
+cat("📊 RMSE :", round(best_rmse, 2), "\n")
+cat("📊 MAE :", round(best_mae, 2), "\n")
+
+# ✅ Normalisation des valeurs pour une meilleure visibilité
+df_errors <- data.frame(Degree = degrees, AIC = aic_values, BIC = bic_values, RMSE = rmse_values, MAE = mae_values) %>%
+  mutate(AIC_norm = (AIC - min(AIC, na.rm = TRUE)) / (max(AIC, na.rm = TRUE) - min(AIC, na.rm = TRUE)),
+         BIC_norm = (BIC - min(BIC, na.rm = TRUE)) / (max(BIC, na.rm = TRUE) - min(BIC, na.rm = TRUE)),
+         RMSE_norm = (RMSE - min(RMSE, na.rm = TRUE)) / (max(RMSE, na.rm = TRUE) - min(RMSE, na.rm = TRUE)),
+         MAE_norm = (MAE - min(MAE, na.rm = TRUE)) / (max(MAE, na.rm = TRUE) - min(MAE, na.rm = TRUE)))
+
+# ✅ Affichage des valeurs des critères pour chaque degré
+df_errors %>%
+  select(Degree, AIC, BIC, RMSE, MAE) %>%
+  mutate(AIC = round(AIC, 2),
+         BIC = round(BIC, 2),
+         RMSE = round(RMSE, 2),
+         MAE = round(MAE, 2)) %>%
+  print()
+
+# 📊 📌 Graphique de sélection du degré optimal avec mise à l'échelle
+ggplot(df_errors, aes(x = Degree)) +
+  geom_line(aes(y = AIC_norm, color = "AIC"), size = 1) +
+  geom_line(aes(y = BIC_norm, color = "BIC"), size = 1) +
+  geom_line(aes(y = RMSE_norm, color = "RMSE"), size = 1) +
+  geom_line(aes(y = MAE_norm, color = "MAE"), size = 1) +
+  labs(title = "Sélection du Meilleur Degré (B-Spline)",
+       x = "Degré (df)",
+       y = "Valeur Normalisée des Critères") +
+  scale_color_manual(values = c("AIC" = "blue", "BIC" = "red", "RMSE" = "green", "MAE" = "orange")) +
+  theme_minimal()
+
+# ✅ Ajustement du meilleur modèle B-Spline
+fit_bspline_best <- lm(value ~ bs(index, df = optimal_degree_bspline), data = df_results)
+summary(fit_bspline_best)
+
+# ✅ Application du modèle B-Spline optimal à la série
+df_results$Pred_BSpline <- predict(fit_bspline_best, newdata = df_results)
+
+# 📊 📌 Graphique du modèle B-Spline optimal appliqué à la série
+ggplot(df_results, aes(x = index)) +
+  geom_line(aes(y = value, color = "Série Originale"), size = 1) +
+  geom_line(aes(y = Pred_BSpline, color = "Modèle B-Spline"), size = 1.2) +
+  labs(title = paste("Meilleur Modèle B-Spline (df =", optimal_degree_bspline, ") Appliqué à la Série"),
+       x = "Index",
+       y = "Valeur de la Série") +
+  scale_color_manual(values = c("Série Originale" = "black", "Modèle B-Spline" = "red")) +
+  theme_minimal()
+
+# ✅ Conserver df_ts_jour en tant que série temporelle
+df_ts_jour <- ts(df_results$value, start = start(df_ts_jour), frequency = frequency(df_ts_jour))
+pred_ts_bspline <- ts(df_results$Pred_BSpline, start = start(df_ts_jour), frequency = frequency(df_ts_jour))
+
+
+```
+
+## Conclusion des méthodes de régression
+
+| Modèle | AIC | BIC | RMSE | MAE |
+|---------------|---------------|---------------|---------------|---------------|
+| Régression linéaire | 49374.59 | 49390.09 | 46595968 | 25596043 |
+| Régression polynomiale (degré 4) | 6185.546 | 6216.539 | 48816763 | 21721011 |
+| [GAM]{style="color:green; font-weight:bold"} | [49172.65]{style="color:green; font-weight:bold"} | [49226.91]{style="color:green; font-weight:bold"} | [42849160]{style="color:green; font-weight:bold"} | [21611490]{style="color:green; font-weight:bold"} |
+| B-Spline (degré 1) | 49190.34 | 49221.33 | 43293439 | 21585093 |
+
+Le GAM offre un compromis solide : • Bon équilibre entre AIC/BIC (proches du meilleur). • Meilleur RMSE (précision élevée). • Un MAE proche du meilleur.
+
+## graphique
+
+```{r}
+# 📌 Charger les bibliothèques nécessaires
+library(ggplot2)
+library(plotly)
+library(dplyr)
+library(mgcv)    # Pour GAM
+library(splines) # Pour B-Spline
+library(zoo)     # Pour la moyenne mobile
+library(tsibble)
+
+# ✅ Création d'une copie de la série temporelle originale avant modifications
+df_ts_lissage <- df_ts_jour  
+
+# ✅ Vérifier si `df_ts_jour` est une série temporelle et convertir en data.frame pour le traitement
+if (is.ts(df_ts_jour)) {
+  start_year <- start(df_ts_jour)[1]
+  start_day <- start(df_ts_jour)[2]
+  df_ts_jour_df <- data.frame(
+    index = seq.Date(from = as.Date(paste0(start_year, "-01-01")), 
+                     length.out = length(df_ts_jour), by = "day"),
+    value = as.numeric(df_ts_jour)
+  )
+} else {
+  df_ts_jour_df <- df_ts_jour  # Si ce n'est pas une série temporelle, on l'utilise tel quel
+}
+
+# ✅ Conversion en tsibble pour analyse
+df_ts_jour_df <- df_ts_jour_df %>%
+  mutate(index = as.Date(index)) %>%
+  as_tsibble(index = index)
+
+# ✅ Création du DataFrame pour stocker les résultats des modèles
+df_results <- data.frame(Time = df_ts_jour_df$index, Observé = df_ts_jour_df$value)
+
+# ✅ Convertir Time en numérique pour les modèles
+df_results$Time <- as.numeric(df_results$Time)
+
+# 📌 **Modèles de Régression avec les paramètres optimaux**
+
+# ✅ 1️⃣ Régression Linéaire
+fit_lin <- lm(Observé ~ Time, data = df_results)
+df_results$Pred_Lin <- predict(fit_lin)
+
+# ✅ 2️⃣ Régression Polynômiale (Degré 4)
+fit_poly4 <- lm(log(Observé) ~ poly(Time, 4, raw = TRUE), data = df_results)
+df_results$Pred_Poly <- exp(predict(fit_poly4))
+
+# ✅ 3️⃣ Modèle GAM (Paramètre de lissage k = 8)
+fit_gam <- gam(Observé ~ s(Time, bs = "cs", k = 8), data = df_results)
+df_results$Pred_GAM <- predict(fit_gam)
+
+# ✅ 4️⃣ Modèle B-Spline (Degré 9)
+fit_bspline <- lm(Observé ~ bs(Time, df = 9), data = df_results)
+df_results$Pred_BSpline <- predict(fit_bspline)
+
+# 📊 **Création du graphique interactif avec ggplot2**
+p <- ggplot(df_results, aes(x = as.Date(Time, origin = "1970-01-01"))) +  
+  geom_line(aes(y = Observé, color = "Série Réelle"), size = 0.8) + 
+  geom_line(aes(y = Pred_Lin, color = "Régression Linéaire"), size = 0.9) +
+  geom_line(aes(y = Pred_Poly, color = "Régression Polynômiale (Degré 4)"), size = 0.9) +
+  geom_line(aes(y = Pred_GAM, color = "Modèle GAM (k=8)"), size = 0.9) +
+  geom_line(aes(y = Pred_BSpline, color = "B-Spline (Degré 9)"), size = 0.9) +
+
+  # ✅ Mise en forme des axes
+  scale_x_date(date_breaks = "1 year", date_labels = "%Y") +
+  scale_y_continuous(labels = scales::comma) +
+
+  # ✅ Attribution des couleurs aux modèles
+  scale_color_manual(values = c(
+    "Série Réelle" = "black",
+    "Régression Linéaire" = "green",
+    "Régression Polynômiale (Degré 4)" = "blue",
+    "Modèle GAM (k=8)" = "goldenrod",
+    "B-Spline (Degré 9)" = "red"
+  )) +
+
+  # ✅ Ajout de titres et légendes
+  labs(title = "Comparaison des Modèles de Régression (Paramètres Optimaux)",
+       x = "Année",
+       y = "Valeur de la Série",
+       color = "Modèles") +
+
+  # ✅ Style graphique
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+        axis.title = element_text(face = "bold"),
+        legend.position = "right")
+
+# 📌 Transformer en graphique interactif avec `plotly`
+ggplotly(p) %>%
+  layout(legend = list(orientation = "v", x = 1, y = 0.5))
+
+# ✅ **Reconstruire `df_ts_jour` comme série temporelle après analyse**
+df_ts_jour <- ts(df_ts_jour_df$value, start = start(df_ts_lissage), frequency = frequency(df_ts_lissage))
+
+# ✅ **Reconstruire les prédictions comme séries temporelles**
+pred_ts_poly <- ts(df_results$Pred_Poly, start = start(df_ts_lissage), frequency = frequency(df_ts_lissage))
+pred_ts_gam <- ts(df_results$Pred_GAM, start = start(df_ts_lissage), frequency = frequency(df_ts_lissage))
+pred_ts_bspline <- ts(df_results$Pred_BSpline, start = start(df_ts_lissage), frequency = frequency(df_ts_lissage))
+pred_ts_lin <- ts(df_results$Pred_Lin, start = start(df_ts_lissage), frequency = frequency(df_ts_lissage))
+
+```
+
+# Méthodes de lissage
+
+Les méthodes de lissage (LOESS, lissage exponentiel simple et double, moyenne mobile) sont utilisées pour réduire le bruit des fluctuations aléatoires et identifier des tendances locales.
+
+## Local polynomial
+
+La régression locale polynomiale (ou LOESS/LOWESS) est une méthode non paramétrique utilisée pour ajuster une courbe aux données en effectuant des régressions polynomiales locales sur des fenêtres glissantes. Elle est particulièrement utile pour capturer des tendances locales non linéaires dans les séries chronologiques.
+
+$$
+\hat{Y}_t = \sum_{j=0}^d \hat{\beta}_j t^j, \quad \text{où} \quad \sum_{i=1}^n W_i (Y_i - \hat{\beta}_0 - \hat{\beta}_1 t_i - \ldots - \hat{\beta}_d t_i^d)^2 \text{ est minimisé.}
+$$
+
+-   $t$ : le point où l’estimation est faite.\
+-   $d$ : le degré du polynôme local (typiquement $d = 1$ ou $d = 2$).\
+-   $W_i$ : les poids attribués aux observations $Y_i$, souvent définis par une fonction noyau (ex. noyau tricube).\
+-   $\hat{\beta}_j$ : les coefficients du polynôme ajusté localement.\
+-   $n$ : le nombre total d'observations dans la fenêtre locale.\
+-   $Y_i$ : les valeurs de la série chronologique associées à chaque point $t_i$.\
+-   **Fenêtre (span)** : proportion des points inclus dans la régression locale (ex. 0.5 pour inclure 50 % des points voisins).
+
+```{r}
+#print(df_ts_jour)
+```
+
+```{r}
+# 📌 Charger les bibliothèques nécessaires
+library(ggplot2)
+library(dplyr)
+library(zoo)  # Pour interpolation des valeurs manquantes
+
+# ✅ Créer une copie de df_ts_jour pour le traitement sans modifier l'original
+df_results <- data.frame(
+  index = time(df_ts_jour),  # Conserve l'index temporel
+  value = as.numeric(df_ts_jour)  # Convertit en valeurs numériques
+)
+
+# ✅ Remplacement des valeurs problématiques (NA, Inf, Zéros)
+df_results <- df_results %>%
+  mutate(value = replace(value, value == 0, 1e-10)) %>%  # Remplace les 0 par une très petite valeur
+  mutate(value = ifelse(value < 0, NA, value)) %>%  # Convertit les valeurs négatives en NA
+  mutate(value = na.approx(value, na.rm = FALSE)) %>%  # Interpolation des valeurs NA
+  filter(!is.infinite(value))  # Supprime les valeurs infinies
+
+# ✅ Définition des paramètres de lissage LOESS à tester (de 1 à 20)
+span_values <- seq(1, 20, by = 1)  # Paramètres de lissage entre 1 et 20
+aic_values <- numeric(length(span_values))
+bic_values <- numeric(length(span_values))
+rmse_values <- numeric(length(span_values))
+mae_values <- numeric(length(span_values))
+
+# 📌 Boucle pour ajuster les modèles LOESS avec différentes valeurs de `span`
+for (i in seq_along(span_values)) {
+  span_val <- span_values[i] / 20  # Normalisation du paramètre
+  
+  tryCatch({
+    fit_loess <- loess(value ~ index, data = df_results, span = span_val, degree = 2)
+    
+    predictions <- predict(fit_loess, newdata = df_results)
+    residuals <- df_results$value - predictions
+
+    # Vérification si les prédictions contiennent des NA avant calcul des critères
+    if (all(!is.na(predictions))) {
+      rmse_values[i] <- sqrt(mean(residuals^2, na.rm = TRUE))
+      mae_values[i] <- mean(abs(residuals), na.rm = TRUE)
+
+      # Calcul manuel de AIC et BIC pour LOESS
+      n <- nrow(df_results)
+      rss <- sum(residuals^2)
+      k <- fit_loess$trace.hat  # Nombre effectif de paramètres
+      aic_values[i] <- n * log(rss / n) + 2 * k
+      bic_values[i] <- n * log(rss / n) + k * log(n)
+
+      # ✅ Affichage des critères pour chaque paramètre testé
+      cat(sprintf("Span = %2d | AIC = %10.2f | BIC = %10.2f | RMSE = %10.4f | MAE = %10.4f\n", 
+                  span_values[i], aic_values[i], bic_values[i], rmse_values[i], mae_values[i]))
+
+    } else {
+      rmse_values[i] <- NA
+      mae_values[i] <- NA
+      aic_values[i] <- NA
+      bic_values[i] <- NA
+    }
+  }, error = function(e) {
+    cat("❌ Erreur à span =", span_val, ": ", e$message, "\n")
+    aic_values[i] <- NA
+    bic_values[i] <- NA
+    rmse_values[i] <- NA
+    mae_values[i] <- NA
+  })
+}
+
+# ✅ Normalisation des valeurs entre 0 et 1 pour l'affichage
+normalize <- function(x) (x - min(x, na.rm = TRUE)) / (max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
+
+df_errors <- data.frame(Span = span_values, 
+                        AIC = normalize(aic_values),
+                        BIC = normalize(bic_values),
+                        RMSE = normalize(rmse_values),
+                        MAE = normalize(mae_values))
+
+# ✅ Sélection du meilleur paramètre basé sur AIC et BIC combinés
+optimal_span_loess <- span_values[which.min(aic_values + bic_values)]
+best_aic <- min(aic_values, na.rm = TRUE)
+best_bic <- min(bic_values, na.rm = TRUE)
+best_rmse <- min(rmse_values, na.rm = TRUE)
+best_mae <- min(mae_values, na.rm = TRUE)
+
+# ✅ Affichage structuré des résultats
+cat("\n🔹 **Sélection du Modèle LOESS Optimal** 🔹\n")
+cat("✅ **Le paramètre de lissage optimal sélectionné est : span =", round(optimal_span_loess, 2), "**\n")
+cat("📊 **Valeur du AIC :**", round(best_aic, 2), "\n")
+cat("📊 **Valeur du BIC :**", round(best_bic, 2), "\n")
+cat("📊 **Valeur du RMSE :**", round(best_rmse, 2), "\n")
+cat("📊 **Valeur du MAE :**", round(best_mae, 2), "\n\n")
+
+# 📊 📌 Graphique de sélection du paramètre optimal avec **valeurs entre 0 et 1**
+ggplot(df_errors, aes(x = Span)) +
+  geom_line(aes(y = AIC, color = "AIC"), size = 1) +
+  geom_line(aes(y = BIC, color = "BIC"), size = 1) +
+  geom_line(aes(y = RMSE, color = "RMSE"), size = 1) +
+  geom_line(aes(y = MAE, color = "MAE"), size = 1) +
+  labs(title = "Sélection du Meilleur Paramètre de Lissage (LOESS)",
+       x = "Paramètre de lissage (1-20)",
+       y = "Valeur des Critères (Normalisé)") +
+  scale_color_manual(values = c("AIC" = "blue", "BIC" = "red", "RMSE" = "green", "MAE" = "orange")) +
+  xlim(0, 20) + ylim(0, 1) +  # ✅ Forcer les axes entre 0 et 20 (X) et 0 et 1 (Y)
+  theme_minimal()
+
+# ✅ Ajustement du modèle LOESS optimal
+fit_loess_best <- loess(value ~ index, data = df_results, span = optimal_span_loess / 20, degree = 2)
+summary(fit_loess_best)
+
+# ✅ Application du modèle LOESS optimal à la série
+df_results$Pred_LOESS <- predict(fit_loess_best, newdata = df_results)
+
+# 📊 📌 Graphique du modèle LOESS optimal appliqué à la série
+ggplot(df_results, aes(x = index)) +
+  geom_line(aes(y = value, color = "Série Originale"), size = 1) +
+  geom_line(aes(y = Pred_LOESS, color = "Modèle LOESS"), size = 1.2) +
+  labs(title = paste("Meilleur Modèle LOESS (span =", round(optimal_span_loess, 2), ") Appliqué à la Série"),
+       x = "Index",
+       y = "Valeur de la Série") +
+  scale_color_manual(values = c("Série Originale" = "black", "Modèle LOESS" = "blue")) +
+  theme_minimal()
+
+# ✅ Conserver df_ts_jour en tant que série temporelle
+df_ts_jour <- ts(df_results$value, start = start(df_ts_jour), frequency = frequency(df_ts_jour))
+pred_ts_loess <- ts(df_results$Pred_LOESS, start = start(df_ts_jour), frequency = frequency(df_ts_jour))
+
+```
+
+## Moyenne mobile
+
+La moyenne mobile est une méthode utilisée pour lisser une série chronologique en calculant la moyenne des valeurs sur une fenêtre glissante de taille k . Elle est simple à mettre en œuvre et aide à atténuer les fluctuations aléatoires pour mieux observer les tendances sous-jacentes.
+
+$$
+\hat{Y}_t = \frac{1}{k} \sum_{i=t-\frac{k-1}{2}}^{t+\frac{k-1}{2}} Y_i
+$$ - $t$ : l’instant où l’estimation est faite.\
+- $k$ : la taille de la fenêtre (doit être impair pour centrer la fenêtre autour de $t$).\
+- $Y_i$ : les valeurs de la série chronologique dans la fenêtre glissante.\
+- **Bords (fill)** : comment gérer les bords de la série (par exemple, `NA` pour des valeurs manquantes).
+
+### Sélection du dégre optimal
+
+```{r}
+# 📌 Charger les bibliothèques nécessaires
+library(ggplot2)
+library(dplyr)
+library(zoo)  # Pour calculer la moyenne mobile
+
+# ✅ Créer une copie de df_ts_jour pour le traitement sans modifier l'original
+df_results <- data.frame(
+  index = time(df_ts_jour),  # Conserve l'index temporel
+  value = as.numeric(df_ts_jour)  # Convertit en valeurs numériques
+)
+
+# ✅ Remplacement des valeurs problématiques (NA, Inf, Zéros)
+df_results <- df_results %>%
+  mutate(value = replace(value, value == 0, 1e-10)) %>%  # Remplace les 0 par une très petite valeur
+  mutate(value = ifelse(value < 0, NA, value)) %>%  # Convertit les valeurs négatives en NA
+  mutate(value = na.approx(value, na.rm = FALSE)) %>%  # Interpolation des valeurs NA
+  filter(!is.infinite(value))  # Supprime les valeurs infinies
+
+# ✅ Définition des fenêtres de lissage à tester (de 1 à 20 jours)
+window_sizes <- 1:20
+aic_values <- numeric(length(window_sizes))
+bic_values <- numeric(length(window_sizes))
+rmse_values <- numeric(length(window_sizes))
+mae_values <- numeric(length(window_sizes))
+
+# 📌 Boucle pour tester plusieurs valeurs de `window_size` pour la moyenne mobile
+for (i in seq_along(window_sizes)) {
+  window_size <- window_sizes[i]
+
+  tryCatch({
+    # Application de la moyenne mobile avec une fenêtre de `window_size`
+    df_results$moving_avg <- rollmean(df_results$value, k = window_size, fill = NA, align = "right")
+
+    # Calcul des erreurs
+    residuals <- df_results$value - df_results$moving_avg
+
+    # Vérification si les prédictions contiennent des NA avant calcul des critères
+    if (all(!is.na(df_results$moving_avg))) {
+      rmse_values[i] <- sqrt(mean(residuals^2, na.rm = TRUE))
+      mae_values[i] <- mean(abs(residuals), na.rm = TRUE)
+
+      # Calcul manuel de AIC et BIC
+      n <- nrow(df_results)
+      rss <- sum(residuals^2, na.rm = TRUE)
+      k <- window_size  # Nombre effectif de paramètres
+      aic_values[i] <- n * log(rss / n) + 2 * k
+      bic_values[i] <- n * log(rss / n) + k * log(n)
+    } else {
+      rmse_values[i] <- NA
+      mae_values[i] <- NA
+      aic_values[i] <- NA
+      bic_values[i] <- NA
+    }
+  }, error = function(e) {
+    cat("❌ Erreur pour window_size =", window_size, ": ", e$message, "\n")
+    aic_values[i] <- NA
+    bic_values[i] <- NA
+    rmse_values[i] <- NA
+    mae_values[i] <- NA
+  })
+}
+
+# ✅ Normalisation des valeurs entre 0 et 1 pour l'affichage
+normalize <- function(x) (x - min(x, na.rm = TRUE)) / (max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
+
+df_errors <- data.frame(Window = window_sizes, 
+                        AIC = normalize(aic_values),
+                        BIC = normalize(bic_values),
+                        RMSE = normalize(rmse_values),
+                        MAE = normalize(mae_values))
+
+# ✅ Sélection de la meilleure fenêtre basée sur AIC et BIC combinés
+optimal_window_size <- window_sizes[which.min(aic_values + bic_values)]
+best_aic <- min(aic_values, na.rm = TRUE)
+best_bic <- min(bic_values, na.rm = TRUE)
+best_rmse <- min(rmse_values, na.rm = TRUE)
+best_mae <- min(mae_values, na.rm = TRUE)
+
+# ✅ Affichage structuré des résultats
+cat("\n🔹 **Sélection du Modèle Moyenne Mobile Optimal** 🔹\n")
+cat("✅ **La meilleure fenêtre de lissage sélectionnée est : window =", optimal_window_size, "jours**\n")
+cat("📊 **Valeur du AIC :**", round(best_aic, 2), "\n")
+cat("📊 **Valeur du BIC :**", round(best_bic, 2), "\n")
+cat("📊 **Valeur du RMSE :**", round(best_rmse, 2), "\n")
+cat("📊 **Valeur du MAE :**", round(best_mae, 2), "\n\n")
+
+# 📊 📌 Graphique de sélection du paramètre optimal avec **valeurs entre 0 et 1**
+ggplot(df_errors, aes(x = Window)) +
+  geom_line(aes(y = AIC, color = "AIC"), size = 1) +
+  geom_line(aes(y = BIC, color = "BIC"), size = 1) +
+  geom_line(aes(y = RMSE, color = "RMSE"), size = 1) +
+  geom_line(aes(y = MAE, color = "MAE"), size = 1) +
+  labs(title = "Sélection du Meilleur Paramètre de Lissage (Moyenne Mobile)",
+       x = "Fenêtre de lissage (jours)",
+       y = "Valeur des Critères (Normalisé)") +
+  scale_color_manual(values = c("AIC" = "blue", "BIC" = "red", "RMSE" = "green", "MAE" = "orange")) +
+  xlim(0, 20) + ylim(0, 1) +  # ✅ Forcer les axes entre 0 et 20 (X) et 0 et 1 (Y)
+  theme_minimal()
+
+# ✅ Ajustement de la meilleure moyenne mobile
+df_results$Pred_Moving_Avg <- rollmean(df_results$value, k = optimal_window_size, fill = NA, align = "right")
+
+# 📊 📌 Graphique du modèle Moyenne Mobile optimal appliqué à la série
+ggplot(df_results, aes(x = index)) +
+  geom_line(aes(y = value, color = "Série Originale"), size = 1) +
+  geom_line(aes(y = Pred_Moving_Avg, color = "Moyenne Mobile"), size = 1.2) +
+  labs(title = paste("Meilleure Moyenne Mobile (Fenêtre =", optimal_window_size, "jours) Appliquée à la Série"),
+       x = "Index",
+       y = "Valeur de la Série") +
+  scale_color_manual(values = c("Série Originale" = "black", "Moyenne Mobile" = "blue")) +
+  theme_minimal()
+
+# ✅ Conserver df_ts_jour en tant que série temporelle
+df_ts_jour <- ts(df_results$value, start = start(df_ts_jour), frequency = frequency(df_ts_jour))
+pred_ts_moving_avg <- ts(df_results$Pred_Moving_Avg, start = start(df_ts_jour), frequency = frequency(df_ts_jour))
+
+```
+
+1.  Lissage des données : • La méthode a réduit les fluctuations et simplifié la série chronologique pour identifier des tendances globales. • Cependant, les variations importantes persistent (max 367,962,095 contre une moyenne de 27,497,397 ).
+2.  Modèle TSLM : • Bien que les coefficients soient significatifs, le faible R² ajusté ( 0.0072 ) indique que le modèle linéaire ne capture qu’une infime partie de la variabilité des données. • Cela suggère que des tendances plus complexes ou des structures non linéaires sont présentes dans la série.
+
+## Lissage exponentiel
+
+Les méthodes de lissages exponentiels permettent de prolonger une série chronologique en vue de réaliser une prévision à court terme.
+
+On emploie le lissage exponentiel simple (LES) lorsqu’il n’existe aucune tendance.
+
+Mais bien souvent il en existe une, et ce sont le lissage double (LED) et surtout le lissage de Holt qui viennent à notre rescousse, voire le lissage de (Holt-Winters) s’il y a une saisonnalité.
+
+### Lissage exponentiel simple(LES)
+
+Si $\alpha$ est proche de 0, la prévision est **rigide** et peu sensible aux fluctuations. En revanche, si $\alpha$ est proche de 1, la prévision est **flexible** et très sensible aux variations.
+
+L'expression de la prévision est donnée par :
+
+$$
+S_t = \alpha \cdot y_t + (1 - \alpha) \cdot S_{t-1} + \epsilon
+$$
+
+ou encore :
+
+$$
+r(x) = \sum_{i=1}^{n} w \beta (x_i - x) Y_i
+$$
+
+Le paramètre $\alpha$ permet de moduler l'importance des dernières réalisations par rapport à l'ensemble de la série temporelle.
+
+L'estimation de $\alpha$ se fait avec la formule suivante :
+
+$$
+\alpha = 1 - e^{-\frac{\Delta T}{\tau}}, \quad \alpha \in ]0, 1[
+$$
+
+```{r}
+
+# Agréger les flux par année (en prenant la somme des flux pour chaque année)
+library(dplyr)
+flux_per_year <- flux_per_day %>%
+  group_by(annee) %>%
+  summarise(flux_annuel = sum(flux))  # On suppose que 'flux' est la variable des flux journaliers
+
+# Créer la série temporelle annuelle
+df_ts_annee <- ts(flux_per_year$flux_annuel, 
+                  start = c(min(as.numeric(flux_per_year$annee))), 
+                  frequency = 1)
+
+# Afficher la série temporelle
+#df_ts_annee
+```
+
+```{r}
+#df_ts_annee <- df_ts_annee / 1e6
+```
+
+1.  Performance du modèle : • Le RMSE ( 693.44 ) et le MAE ( 590.13 ) indiquent une erreur importante dans les prévisions, ce qui peut être dû à des variations importantes ou des structures temporelles non modélisées (par exemple, saisonnalité ou tendance). • La valeur élevée de MAPE ( 828.66 %) montre que les erreurs sont relativement grandes par rapport à l’échelle des données.
+2.  Impact de \alpha : • \alpha = 0.7198 reflète une pondération plus forte pour les observations récentes, ce qui rend le modèle assez flexible pour s’adapter aux fluctuations récentes des données.
+3.  Résidus : • L’autocorrélation négative ( \text{ACF1} = -0.259 ) indique que les erreurs des prévisions successives sont partiellement corrélées, ce qui peut être un signe que le modèle ne capture pas parfaitement la structure des données.
+
+La formule de prédiction est :
+
+$$
+S_t = \alpha \sum_{j=0}^{T} (1 - \alpha)^j x_{T-j}
+$$
+
+Si nous observons $X_1, \dots, X_n$, nous avons :
+
+-   **L'erreur moyenne (ME)** :\
+    $$
+    ME = \frac{1}{n} \sum_{t=1}^n e_t
+    $$
+
+-   **L'erreur quadratique moyenne (RMSE)** :\
+    $$
+    RMSE = \sqrt{\frac{1}{n} \sum_{t=1}^n e_t^2}
+    $$
+
+-   **L'erreur absolue moyenne (MAE)** :\
+    $$
+    MAE = \frac{1}{n} \sum_{t=1}^n |e_t|
+    $$
+
+-   **L'erreur en pourcentage moyenne (MPE)** :\
+    $$
+    MPE = 100 \times \frac{1}{n} \sum_{t=1}^n \frac{e_t}{X_t}
+    $$
+
+-   **L'erreur relative moyenne (MAPE)** :\
+    $$
+    MAPE = 100 \times \frac{1}{n} \sum_{t=1}^n \left| \frac{e_t}{X_t} \right|
+    $$
+
+-   **L'erreur moyenne normalisée** :\
+    $$
+    \frac{n-1}{n} \sum_{t=1}^n e_t \sum_{u=2}^n |X_u - X_{u-1}|
+    $$
+
+```{r}
+class(df_ts_annee)  # Doit retourner "ts"
+```
+
+```{r}
+# 📌 Charger les bibliothèques nécessaires
+library(ggplot2)
+library(dplyr)
+library(zoo)  # Pour interpolation des valeurs manquantes
+library(forecast)  # Pour le lissage exponentiel simple (SES)
+
+# ✅ Vérification et création d'une copie de la série temporelle
+df_ts_jour <- ts(df_ts_jour, start = start(df_ts_jour), frequency = frequency(df_ts_jour))
+
+# ✅ Appliquer le lissage exponentiel simple (SES) avec optimisation automatique d'alpha
+fit_ets_ses <- ets(df_ts_jour, model = "ANN")  # "ANN" = Simple Exponential Smoothing (alpha optimisé)
+
+# ✅ Résumé du modèle avec les paramètres optimisés
+summary(fit_ets_ses)
+
+# ✅ Récupérer les valeurs lissées
+df_results <- data.frame(
+  index = time(df_ts_jour), 
+  value = as.numeric(df_ts_jour),
+  Pred_Exp = as.numeric(fitted(fit_ets_ses))  # Valeurs ajustées du modèle SES
+)
+
+# 📊 📌 Graphique du modèle SES appliqué à la série
+ggplot(df_results, aes(x = index)) +
+  geom_line(aes(y = value, color = "Série Originale"), size = 1) +
+  geom_line(aes(y = Pred_Exp, color = "Lissage Exponentiel"), size = 1.2) +
+  labs(title = paste("Lissage Exponentiel Simple (SES) Appliqué à la Série"),
+       x = "Index",
+       y = "Valeur de la Série") +
+  scale_color_manual(values = c("Série Originale" = "black", "Lissage Exponentiel" = "blue")) +
+  theme_minimal()
+
+# ✅ Conserver df_ts_jour en tant que série temporelle
+df_ts_jour <- ts(df_results$value, start = start(df_ts_jour), frequency = frequency(df_ts_jour))
+pred_ts_exp <- ts(df_results$Pred_Exp, start = start(df_ts_jour), frequency = frequency(df_ts_jour))
+```
+
+Ce graphique montre une prévision réalisée avec un modèle de lissage exponentiel ETS(A,N,N), adapté pour des séries sans tendance ni saisonnalité. La courbe noire illustre les données historiques (2015-2020), marquées par une forte variabilité autour de zéro. La courbe bleue représente les prévisions, qui montrent une stabilisation à moyen terme. La zone grise correspond à l'intervalle de confiance, qui s'élargit progressivement, indiquant une incertitude croissante. Ce modèle convient si les données n’ont pas de cycles ou de tendances significatifs.
+
+### Lissage exponentiel double (LED)
+
+On applique un second lissage exponentiel au premier lissage exponentiel simple afin de prendre en compte la tendance.
+
+**Lissage exponentiel pour le niveau (**$L_t$) :
+
+$$
+   L_t = \alpha X_t + (1 - \alpha) [L_{t-1} + B_{t-1}]
+   $$
+
+où :
+
+-   $L_t$ : Niveau lissé à l'instant $t$,
+
+-   $X_t$ : Valeur observée à l'instant $t$,
+
+-   $\alpha$ : Paramètre de lissage pour le niveau (entre 0 et 1),
+
+-   $L_{t-1}$ : Niveau lissé à l'instant $t-1$,
+
+-   $B_{t-1}$ : Tendance estimée à l'instant $t-1$.
+
+**Lissage exponentiel pour la tendance (**$B_t$) :
+
+$$
+   B_t = \beta [L_t - L_{t-1}] + (1 - \beta) B_{t-1}
+   $$ où :
+
+-   $B_t$ : Tendance lissée à l'instant $t$,
+
+-   $\beta$ : Paramètre de lissage pour la tendance (entre 0 et 1),
+
+-   $L_t$ et $L_{t-1}$ : Niveau lissé à l'instant $t$ et $t-1$.
+
+-   $\alpha$ et $\beta$ sont les paramètres de lissage pour respectivement le niveau et la tendance.
+
+-   Ces équations permettent de modéliser la tendance dans les séries temporelles en combinant à la fois un **lissage du niveau** et un **lissage de la tendance**.
+
+```{r}
+# 📌 Charger les bibliothèques nécessaires
+library(ggplot2)
+library(dplyr)
+library(zoo)  # Pour interpolation des valeurs manquantes
+library(forecast)  # Pour le lissage exponentiel double (Holt)
+
+# ✅ Assurer que df_ts_jour est bien une série temporelle
+df_ts_jour <- ts(df_ts_jour, start = start(df_ts_jour), frequency = frequency(df_ts_jour))
+
+# ✅ Appliquer le modèle de Holt avec estimation automatique des paramètres
+fit_holt <- holt(df_ts_jour, h = 10)  # "h = 10" est arbitraire, il est utilisé uniquement pour la prévision
+summary(fit_holt)
+
+# ✅ Récupérer les valeurs ajustées (fitted values)
+df_results <- data.frame(
+  index = time(df_ts_jour), 
+  value = as.numeric(df_ts_jour),
+  Pred_Holt = as.numeric(fitted(fit_holt))  # Valeurs ajustées du modèle Holt
+)
+
+# 📊 📌 Graphique du modèle Holt appliqué à la série
+ggplot(df_results, aes(x = index)) +
+  geom_line(aes(y = value, color = "Série Originale"), size = 1) +
+  geom_line(aes(y = Pred_Holt, color = "Lissage Exponentiel Double"), size = 1.2) +
+  labs(title = paste("Lissage Exponentiel Double (Holt) Appliqué à la Série"),
+       x = "Index",
+       y = "Valeur de la Série") +
+  scale_color_manual(values = c("Série Originale" = "black", "Lissage Exponentiel Double" = "blue")) +
+  theme_minimal()
+
+# ✅ Conserver df_ts_jour en tant que série temporelle
+df_ts_jour <- ts(df_results$value, start = start(df_ts_jour), frequency = frequency(df_ts_jour))
+pred_ts_holt <- ts(df_results$Pred_Holt, start = start(df_ts_jour), frequency = frequency(df_ts_jour))
+```
+
+1.  Performance du modèle : • Le RMSE ( 760.38 ) et le MAE ( 535.60 ) restent relativement élevés, reflétant des erreurs importantes dans les prévisions. • Le MAPE ( 245.06 %) indique une forte variabilité par rapport aux valeurs réelles, mais cela peut être influencé par l’échelle de la série.
+2.  Tendance estimée : • La tendance ( b = 959.52 ) suggère une progression linéaire positive. Cela est reflété par la courbe bleue dans le graphique, qui montre une tendance à long terme légèrement ascendante.
+3.  Résidus : • L’autocorrélation résiduelle négative ( \text{ACF1} = -0.487 ) indique que le modèle laisse des schémas non capturés, suggérant qu’il pourrait ne pas convenir parfaitement aux données.
+4.  Précision des prévisions : • La zone grisée dans le graphique illustre une augmentation de l’incertitude au fur et à mesure que l’on s’éloigne des données historiques. Cela reflète une limite classique des méthodes de prévision linéaire.
+
+## Conclusion : Méthodes de lissage
+
+| Modèle | AIC | BIC | RMSE | MAE |
+|---------------|---------------|---------------|---------------|---------------|
+| **LOESS** | [**45499.93**]{style="color:green;"} | [**45542.99**]{style="color:green;"} | 42912681 | 21457482 |
+| **Lissage exponentiel simple (LES)** | 54413.70 | 54429.20 | [**37517665**]{style="color:green;"} | [**15984248**]{style="color:green;"} |
+| Lissage exponentiel double (LED) | 54417.83 | 54443.66 | 37519538 | 15983751 |
+
+```         
+•   LOESS est le meilleur modèle en termes de AIC et BIC, ce qui indique une meilleure qualité statistique du modèle.
+
+•   Lissage exponentiel simple (LES) a les meilleures valeurs RMSE et MAE, ce qui signifie qu’il donne des prévisions plus précises en minimisant l’erreur.
+```
+
+# graphique
+
+```{r}
+# 📌 Charger les bibliothèques nécessaires
+library(ggplot2)
+library(plotly)
+library(dplyr)
+library(forecast)  # Pour les modèles de lissage exponentiel
+library(zoo)       # Pour la moyenne mobile
+library(tsibble)   # Pour la manipulation des séries temporelles
+
+# ✅ Création d'une copie de la série temporelle originale avant modifications
+df_ts_lissage <- df_ts_jour  
+
+# ✅ Vérifier si `df_ts_jour` est une série temporelle et convertir en data.frame
+if (is.ts(df_ts_jour)) {
+  start_year <- start(df_ts_jour)[1]
+  df_ts_jour_df <- data.frame(
+    index = seq.Date(from = as.Date(paste0(start_year, "-01-01")), 
+                     length.out = length(df_ts_jour), by = "day"),
+    value = as.numeric(df_ts_jour)
+  )
+} else {
+  df_ts_jour_df <- df_ts_jour
+}
+
+# ✅ Conversion en tsibble pour analyse
+df_ts_jour_df <- df_ts_jour_df %>%
+  mutate(index = as.Date(index)) %>%
+  as_tsibble(index = index)
+
+# ✅ Création du DataFrame pour stocker les résultats des modèles
+df_results <- data.frame(Time = df_ts_jour_df$index, Observé = df_ts_jour_df$value)
+
+# ✅ Ajustement des modèles de lissage exponentiel
+
+# 1️⃣ **Lissage Exponentiel Simple (LES)**
+fit_les <- ets(df_ts_jour, model = "ANN")  # ETS avec tendance additive
+df_results$Pred_LES <- fitted(fit_les)
+
+# 2️⃣ **Lissage Exponentiel Double (Holt)**
+fit_led <- ets(df_ts_jour, model = "AAN")  # Holt avec tendance
+df_results$Pred_LED <- fitted(fit_led)
+
+# 3️⃣ **Lissage LOESS (paramètre span = 0.2)**
+fit_loess <- loess(value ~ as.numeric(index), data = df_ts_jour_df, span = 0.2)
+df_results$Pred_LOESS <- predict(fit_loess, newdata = df_ts_jour_df)
+
+# 4️⃣ **Moyenne Mobile (fenêtre de 7 jours)**
+df_results$Pred_MA <- rollmean(df_results$Observé, k = 7, fill = NA, align = "right")
+
+# 📊 **Création du graphique interactif avec ggplot2**
+p <- ggplot(df_results, aes(x = as.Date(Time, origin = "1970-01-01"))) +  
+  geom_line(aes(y = Observé, color = "Série Réelle"), size = 0.8) + 
+  geom_line(aes(y = Pred_LES, color = "Lissage Exponentiel Simple (LES)"), size = 0.9) +
+  geom_line(aes(y = Pred_LED, color = "Lissage Exponentiel Double (LED)"), size = 0.9) +
+  geom_line(aes(y = Pred_LOESS, color = "Lissage LOESS"), size = 0.9) +
+  geom_line(aes(y = Pred_MA, color = "Moyenne Mobile (7 jours)"), size = 0.9) +
+
+  # ✅ Mise en forme des axes
+  scale_x_date(date_breaks = "1 year", date_labels = "%Y") +
+  scale_y_continuous(labels = scales::comma) +
+
+  # ✅ Attribution des couleurs aux modèles
+  scale_color_manual(values = c(
+    "Série Réelle" = "black",
+    "Lissage Exponentiel Simple (LES)" = "blue",
+    "Lissage Exponentiel Double (LED)" = "red",
+    "Lissage LOESS" = "goldenrod",
+    "Moyenne Mobile (7 jours)" = "green"
+  )) +
+
+  # ✅ Ajout de titres et légendes
+  labs(title = "Comparaison des Modèles de Lissage",
+       x = "Année",
+       y = "Valeur de la Série",
+       color = "Modèles") +
+
+  # ✅ Style graphique
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+        axis.title = element_text(face = "bold"),
+        legend.position = "right")
+
+# 📌 Transformer en graphique interactif avec `plotly`
+ggplotly(p) %>%
+  layout(legend = list(orientation = "v", x = 1, y = 0.5))
+
+# ✅ **Reconstruire `df_ts_jour` comme série temporelle après analyse**
+df_ts_jour <- ts(df_ts_jour_df$value, start = start(df_ts_lissage), frequency = frequency(df_ts_lissage))
+
+```
+
+# Meilleur modèle parmis les deux méthodes : regression et lissage
+
+| Modèle | AIC | BIC | RMSE | MAE |
+|---------------|---------------|---------------|---------------|---------------|
+| **GAM** | 49172.66 | 49218.41 | 42903873 | 21341575 |
+| **LOESS** | [**45499.93**]{style="color:green;"} | [**45542.99**]{style="color:green;"} | 42912681 | 21457482 |
+| **Lissage exponentiel simple (LES)** | 54413.70 | 54429.20 | [**37517665**]{style="color:green;"} | [**15984248**]{style="color:green;"} |
+
+📊 Analyse des résultats :
+
+1.AIC et BIC :
+
+• LOESS est le meilleur modèle avec le plus faible AIC (45499.93) et BIC (45542.99).
+
+• GAM arrive en second (AIC = 49172.66, BIC = 49218.41).
+
+• Le lissage exponentiel simple (LES) est le pire en AIC/BIC. 
+
+2. Erreur de prédiction (RMSE & MAE) :
+
+• Le modèle LES a les erreurs les plus faibles (RMSE = 37517665, MAE = 15984248), ce qui indique qu’il est le plus précis en prédiction.
+
+• GAM et LOESS ont des erreurs similaires en RMSE et MAE.
+
+| 🎯 Critère | 🏆 Meilleur Modèle |
+|--------------------------------------|----------------------------------|
+| **Modèle avec le plus faible AIC & BIC** | **LOESS** |
+| **Modèle avec les plus faibles erreurs (RMSE & MAE)** | **Lissage exponentiel simple (LES)** |
+| **Meilleur compromis global** | **LOESS** |
+
+# Analyse des résidus du modèle de moyenne mobile
+
+💡 Objectif : Vérifier si le modèle Lissage exponentiel simple (LES) est bien ajusté à notre série temporelle en analysant ses résidus.
+
+## Visualiser les Résidus
+
+```{r}
+library(ggplot2)
+library(forecast)
+library(tseries)
+
+# ✅ Appliquer le modèle de lissage exponentiel simple (ETS "ANN")
+fit_ets_ses <- ets(df_ts_jour, model = "ANN")
+
+# ✅ Extraction des résidus
+residuals_les <- residuals(fit_ets_ses)
+
+ggplot(data.frame(Time = time(residuals_les), Residus = residuals_les), aes(x = Time, y = Residus)) +
+  geom_line(color = "blue") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Évolution des Résidus du Lissage Exponentiel Simple (ETS 'ANN')", 
+       x = "Temps", y = "Résidus") +
+  theme_minimal()
+```
+
+Les résidus semblent osciller autour de zéro, mais des pics importants sont visibles, ce qui peut indiquer une mauvaise capture des variations par le modèle.
+
+```{r}
+ggplot(data.frame(Residus = residuals_les), aes(x = Residus)) +
+  geom_histogram(color = "black", fill = "blue", bins = 30, alpha = 0.7) +
+  geom_vline(xintercept = mean(residuals_les, na.rm = TRUE), linetype = "dashed", color = "red") +
+  labs(title = "Distribution des Résidus du LES (ETS 'ANN')", 
+       x = "Résidus", y = "Fréquence") +
+  theme_minimal()
+```
+
+Forte concentration des résidus autour de zéro, ce qui peut suggérer un biais dans l’ajustement du modèle.
+
+## QQ-plot pour vérifier la normalité
+
+```{r}
+qqnorm(residuals_les, main = "QQ-plot des Résidus du LES (ETS 'ANN')")
+qqline(residuals_les, col = "red")
+```
+
+Les résidus ne suivent pas une distribution normale, ce qui est confirmé par le test de Shapiro-Wilk.
+
+## Autocorrélogramme des résidus (ACF)
+
+```{r}
+acf(residuals_les, main = "Autocorrélogramme des Résidus du LES (ETS 'ANN')")
+```
+
+Aucune autocorrélation significative observée, validant ainsi l’hypothèse que les erreurs sont indépendantes.
+
+## Tests Statistiques sur les Résidus
+
+### Test de normalité de Shapiro-Wilk
+
+```{r}
+shapiro.test(residuals_les)
+```
+
+```         
+•   📌 p-value < 0.05 : On rejette l’hypothèse nulle de normalité.
+
+•   Conclusion : Les résidus ne suivent pas une distribution normale. Cela suggère que le modèle pourrait être amélioré, car un bon modèle produit généralement des résidus normalement distribués.
+```
+
+### Test de Ljung-Box pour vérifier l’autocorrélation
+
+```{r}
+Box.test(residuals_les, type = "Ljung-Box")
+```
+
+📌 p-value \> 0.05 : On ne rejette pas l’hypothèse nulle d’absence d’autocorrélation.
+
+```         
+•   Conclusion : Les résidus ne présentent pas d’autocorrélation significative, ce qui est un bon signe pour la validité du modèle.
+```
+
+### Test de stationnarité de Dickey-Fuller Augmenté (ADF)
+
+```{r}
+adf.test(residuals_les)
+```
+
+```         
+•   📌 p-value < 0.05 : On rejette l’hypothèse nulle de non-stationnarité.
+
+•   Conclusion : Les résidus sont stationnaires, ce qui signifie que le modèle ne présente pas de tendance non expliquée.
+```
+
+🎯 Bilan Global
+
+| Critère | Résultat | Interprétation |
+|-----------------------|------------------------------|-------------------|
+| **Normalité (Shapiro-Wilk)** | ❌ Non normale (p \< 0.05) | Modèle à améliorer |
+| **Autocorrélation (Ljung-Box)** | ✅ Pas d’autocorrélation (p \> 0.05) | Modèle valide |
+| **Stationnarité (ADF Test)** | ✅ Stationnaire (p \< 0.05) | Modèle valide |
+
+# Modèle ARIMA, différenciation et stationarité.
+
+**Définition d'un processus ARMA**
+
+Un processus $(Y_t)$ est un processus **ARMA d’ordre** $p$ et $q$, noté **ARMA(p, q)**, si :
+
+$$
+Y_t - \sum_{i=1}^p \phi_i Y_{t-i} = \epsilon_t - \sum_{i=1}^q \theta_i \epsilon_{t-i}
+$$
+
+**Paramètres**
+
+-   $p$ : l'ordre de la composante autorégressive (**AR**, Autoregressive).
+-   $q$ : l'ordre de la composante moyenne mobile (**MA**, Moving Average).
+-   $Y_t$ : la valeur de la série au temps $t$.
+-   $\phi_i$ : les coefficients de la partie autorégressive.
+-   $\epsilon_t$ : un bruit blanc centré ($\mathbb{E}[\epsilon_t] = 0$, $\text{Var}[\epsilon_t] = \sigma^2$).
+-   $\theta_i$ : les coefficients de la partie moyenne mobile.
+
+**orme compacte**
+
+Le modèle ARMA(p, q) combine :
+
+1.  **AR(p)** : $Y_t = \sum_{i=1}^p \phi_i Y_{t-i} + \epsilon_t$
+
+2.  **MA(q)** : $Y_t = \epsilon_t - \sum_{i=1}^q \theta_i \epsilon_{t-i}$
+
+Ensemble, cela donne l'équation générale ci-dessus.
+
+------------------------------------------------------------------------
+
+```{r}
+ggAcf(df_ts_jour,lag=200)
+```
+
+```{r}
+ggAcf(df_ts_jour,lag=100)
+```
+
+```{r}
+ggAcf(df_ts_jour,lag=50)
+```
+
+```{r}
+ggPacf(df_ts_jour,lag=200)
+```
+
+## Différentiation et stationarité.
+
+La différenciation est une technique utilisée en analyse des séries temporelles pour rendre une série stationnaire en éliminant les tendances ou les variations cycliques. Elle consiste à calculer la différence entre une observation et sa valeur précédente, créant ainsi une nouvelle série. Par exemple, pour une série $Y_t$, la différenciation produit une nouvelle série $Z_t = Y_t - Y_{t-1}$. Cette méthode est couramment utilisée dans les modèles ARIMA pour répondre à la condition de stationnarité. Cependant, une différenciation excessive peut entraîner la perte d'informations importantes sur la structure de la série.
+
+### Fonction ndiffs
+
+La fonction **ndiffs** permet de déterminer le nombre de différenciations nécessaires pour rendre une série temporelle stationnaire en faisant les différents test de saisonalité, *kpss*, *adf*, *pp*.
+
+#### Test du nombre de différenciation
+
+```{r}
+ndiffs(df_ts_lissage,test =c("kpss", "adf", "pp")) 
+```
+
+```{r}
+diff_ts = diff(df_ts_lissage)
+```
+
+
+
+## ARIMA
+
+### Application Modele de base
+
+#### ACF et PACF
+
+```{r}
+ggAcf(diff_ts, lag = 80)
+ggPacf(diff_ts , lag = 80)
+```
+
+Cela sugère que q = 1 et p = 5
+
+#### Modélisation de ARIMA et Auto ARIMA
+
+```{r}
+model_arima <- auto.arima((diff_ts))
+summary(model_arima)
+
+```
+
+Notre modèle *ARIMA(0,0,0)* indique que les données ne présentent aucune structure temporelle exploitable, ce qui correspond à un bruit blanc.
+Auto-ARIMA l’a sélectionné car il présente un AIC plus faible que les autres modèles testés.
+Dans notre cas, un ARIMA(0,1,0) serait plus approprié, indiquant une marche aléatoire.
+Cela est cohérent avec le modèle de *lissage exponentiel simple*, où les résidus ne montrent pas d'autocorrélation significative.
+
+### Résidus du modèle
+
+```{r}
+acf(residuals(model_arima))
+pacf(residuals(model_arima))
+
+### Modèle Box-Cox ARIMA
+```
+On a regardé les résidus mais cela n'est pas vraiment utile au vu de nos résultats précédents.
+
+
+
+
