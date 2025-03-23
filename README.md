@@ -9,7 +9,7 @@ Ce dépôt contient plusieurs notebooks de projets réalisés en machine learnin
 - Autoencodeur convolutif
 
 ## Outils utilisés
-- Python (TensorFlow, scikit-learn, pandas)
+- Python (TensorFlow, scikit-learn, Keras,pandas)
 - R (Shiny, ggplot2)
 - Jupyter Notebook
 - RMarkdown
